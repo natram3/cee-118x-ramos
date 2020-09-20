@@ -4,25 +4,242 @@ output: html_document
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(echo = T, warning = F, message = F)
+
+library(tidyverse)
+library(plotly)
+library(lubridate)
+library(scales)
+library(sf)
+library(tigris)
+library(leaflet)
+
+options(tigris_use_cache = TRUE)
 ```
 
-## R Markdown
+```{r county set-up}
+ca_counties <- counties("CA", cb = T, progress_bar = F)
+projection <- "+proj=utm +zone=10 +ellps=GRS80 +datum=NAD83 +units=ft +no_defs"
 
-This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+ca_counties_transformed <- 
+  ca_counties %>% 
+  st_transform(4326) %>% 
+  st_transform(26910) %>% 
+  st_transform(projection) %>% 
+  st_transform(st_crs(ca_counties))
 
-When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+bay_county_names <-
+  c("Alameda",
+    "Contra Costa",
+    "Marin",
+    "Napa",
+    "San Francisco",
+    "San Mateo",
+    "Santa Clara",
+    "Solano",
+    "Sonoma")
+bay_counties <-
+  ca_counties %>%
+  filter(NAME %in% bay_county_names)
 
-```{r cars}
-summary(cars)
+usa_zips <- 
+  zctas(cb = T, progress_bar = F)
+bay_zips <-
+  usa_zips %>% 
+  st_centroid() %>% 
+  .[bay_counties, ] %>% 
+  st_set_geometry(NULL) %>% 
+  left_join(usa_zips %>% select(GEOID10)) %>% 
+  st_as_sf()
 ```
 
-## Including Plots
+```{r file loading}
 
-You can also embed plots, for example:
+years <- 2017:2020
+quarters <- 1:4
+type <- "Electric"
+pge_17_20_elec <- NULL
 
-```{r pressure, echo=FALSE}
-plot(pressure)
+for (year in years) {
+  for (quarter in quarters) {
+    if (year < 2020) {
+      filename <- paste0(
+      "PGE_",year,"_Q",quarter,"_",type,"UsageByZip.csv"
+        )
+      temp <- read_csv(filename)
+      pge_17_20_elec <- rbind(pge_17_20_elec, temp)
+      saveRDS(pge_17_20_elec, "pge_17_20_elec.rds")
+      }
+    else {
+      if (quarter < 3) {
+        filename <- paste0(
+        "PGE_",year,"_Q",quarter,"_",type,"UsageByZip.csv"
+        )
+        print(filename)
+        temp <- read_csv(filename)
+        pge_17_20_elec <- rbind(pge_17_20_elec, temp)
+        saveRDS(pge_17_20_elec, "pge_17_20_elec.rds")
+      }
+    }
+  }
+}
+
+type <- "Gas"
+pge_17_20_gas <- NULL
+
+for (year in years) {
+  for (quarter in quarters) {
+    if (year < 2020) {
+      filename <- paste0(
+      "PGE_",year,"_Q",quarter,"_",type,"UsageByZip.csv"
+      )
+      temp <- read_csv(filename)
+      pge_17_20_gas <- rbind(pge_17_20_gas, temp)
+      saveRDS(pge_17_20_gas, "pge_17_20_gas.rds")
+      }
+    else {
+      if (quarter < 3) {
+        filename <- paste0(
+        "PGE_",year,"_Q",quarter,"_",type,"UsageByZip.csv"
+        )
+        temp <- read_csv(filename)
+        pge_17_20_gas <- rbind(pge_17_20_gas, temp)
+        saveRDS(pge_17_20_gas, "pge_17_20_gas.rds")
+      }
+    }
+  }
+}
 ```
 
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+
+
+```{r file filtering}
+
+pge_17_20_elec <- mutate(pge_17_20_elec, TOTALKBTU = TOTALKWH*3412.14) 
+pge_elec_filter <-
+  pge_17_20_elec %>% 
+  filter(CUSTOMERCLASS %in% c("Elec- Residential", "Elec- Commercial")) %>% 
+  mutate(ZIPCODE = ZIPCODE %>% as.character()) %>%
+  filter(ZIPCODE %in% bay_zips$ZCTA5CE10) %>% 
+  group_by(ZIPCODE,CUSTOMERCLASS,MONTH,YEAR) %>% 
+  summarize(TOTALKBTU = sum(TOTALKBTU, na.rm = T)) %>% 
+  left_join(
+    bay_zips %>% select(GEOID10),
+    by = c("ZIPCODE" = "GEOID10")
+    ) %>% 
+  st_as_sf() %>% 
+  st_transform(4326)
+  
+
+pge_17_20_gas <- mutate(pge_17_20_gas, TOTALKBTU = TOTALTHM*99976.1)
+
+pge_gas_filter <-
+  pge_17_20_gas %>%
+  filter(CUSTOMERCLASS %in% c("Gas- Residential", "Gas- Commercial")) %>%
+  mutate(ZIPCODE = ZIPCODE %>% as.character()) %>% 
+  filter(ZIPCODE %in% bay_zips$ZCTA5CE10) %>%
+  group_by(ZIPCODE,CUSTOMERCLASS,MONTH,YEAR) %>%
+  summarize(TOTALKBTU = sum(TOTALKBTU, na.rm = T)) %>% 
+  left_join(
+    bay_zips %>% select(GEOID10),
+    by = c("ZIPCODE" = "GEOID10")
+  ) %>%
+  st_as_sf() %>%
+  st_transform(4326)
+
+pge_final <- rbind(pge_elec_filter,pge_gas_filter)
+pge_final$DATE <- paste(pge_final$YEAR, "-", pge_final$MONTH, "-01", sep="") %>% as.Date(format = "%Y-%m-%d")
+```
+
+
+```{r graph}
+pge_chart <-
+  pge_final %>% 
+  ggplot() +
+  geom_bar(
+    aes(
+      x = DATE,
+      y = TOTALKBTU,
+      fill = CUSTOMERCLASS
+    ),
+    stat = "identity",
+    position = "stack"
+  ) + 
+  labs(
+    x = "Month",
+    y = "kBTU",
+    title = "PG&E Bay Area Monthly kBTU Usage, 2017-2020(Q1+Q2)",
+    fill = "Electricity Type"
+  ) + scale_x_date(date_breaks = "1 month", date_labels ="%m-%y", expand = c(0,0)) +  
+      theme(axis.text.x = element_text(size = 6, angle = 45, colour = "black",
+      vjust = 1, hjust = 1))
+pge_chart
+```
+```{r}
+
+pge_19_elec <- pge_17_20_elec %>% filter(YEAR == "2019") %>% 
+  filter(MONTH == 3) %>% 
+  filter(CUSTOMERCLASS %in% c("Elec- Commercial","Elec- Residential")) %>% 
+  mutate(ZIPCODE = ZIPCODE %>% as.character()) %>%
+  filter(ZIPCODE %in% bay_zips$ZCTA5CE10) %>% 
+  group_by(ZIPCODE) %>% 
+  summarize(TOTALKWH = sum(TOTALKWH, na.rm = T)) %>% 
+  left_join(
+    bay_zips %>% select(GEOID10),
+    by = c("ZIPCODE" = "GEOID10")
+  ) %>% 
+  st_as_sf() %>% 
+  st_transform(4326)
+
+pge_20_elec <- pge_17_20_elec %>% filter(YEAR == "2020") %>% 
+  filter(MONTH == 3) %>% 
+  filter(CUSTOMERCLASS %in% c("Elec- Commercial","Elec- Residential")) %>% 
+  mutate(ZIPCODE = ZIPCODE %>% as.character()) %>%
+  filter(ZIPCODE %in% bay_zips$ZCTA5CE10) %>% 
+  group_by(ZIPCODE) %>% 
+  summarize(TOTALKWH = sum(TOTALKWH, na.rm = T)) %>% 
+  left_join(
+    bay_zips %>% select(GEOID10),
+    by = c("ZIPCODE" = "GEOID10")
+  ) %>% 
+  st_as_sf() %>% 
+  st_transform(4326)
+
+pge_1920_elec <- cbind(pge_20_elec,pge_19_elec)
+pge_1920_elec <- mutate(pge_1920_elec, CHANGE = TOTALKWH-TOTALKWH.1)
+```
+From the previous graph, it appears that electricity consumption in the Bay Area is slightly greater in March 2020 (shelter-in-place orders were first enacted on March 16) than in March 2019. While sheltering in place may lend itself to increased electricity consumption residentially rather than commercially, it is unclear how that manifests on the following graph, as changes do not seem to correspond to urban centers. Other factors, such as weather, may influence regional changes in electricity consumption.
+```{r map}
+
+res_pal <- colorNumeric(
+  palette = "viridis",
+  domain = 
+    pge_1920_elec$CHANGE
+)
+
+leaflet() %>% 
+  addTiles() %>% 
+  addPolygons(
+    data = pge_1920_elec,
+    fillColor = ~res_pal(CHANGE),
+    color = "white",
+    opacity = 0.5,
+    fillOpacity = 0.5,
+    weight = 1,
+    label = ~paste0(
+      round(CHANGE), 
+      " kWh change in ",
+      ZIPCODE
+    ),
+    highlightOptions = highlightOptions(
+      weight = 2,
+      opacity = 1
+    )
+  ) %>% 
+  addLegend(
+    data = pge_1920_elec,
+    pal = res_pal,
+    values = ~CHANGE,
+    title = "Regional Change in kWh, comparing March of 2019 and 2020"
+  )
+```
