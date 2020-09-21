@@ -120,10 +120,9 @@ pge_elec_filter <-
   pge_17_20_elec %>% 
   filter(CUSTOMERCLASS %in% c("Elec- Residential", "Elec- Commercial")) %>% 
   mutate(ZIPCODE = ZIPCODE %>% as.character()) %>%
-  filter(ZIPCODE %in% bay_zips$ZCTA5CE10) %>% 
   group_by(ZIPCODE,CUSTOMERCLASS,MONTH,YEAR) %>% 
   summarize(TOTALKBTU = sum(TOTALKBTU, na.rm = T)) %>% 
-  left_join(
+  right_join(
     bay_zips %>% select(GEOID10),
     by = c("ZIPCODE" = "GEOID10")
     ) %>% 
@@ -137,10 +136,9 @@ pge_gas_filter <-
   pge_17_20_gas %>%
   filter(CUSTOMERCLASS %in% c("Gas- Residential", "Gas- Commercial")) %>%
   mutate(ZIPCODE = ZIPCODE %>% as.character()) %>% 
-  filter(ZIPCODE %in% bay_zips$ZCTA5CE10) %>%
   group_by(ZIPCODE,CUSTOMERCLASS,MONTH,YEAR) %>%
   summarize(TOTALKBTU = sum(TOTALKBTU, na.rm = T)) %>% 
-  left_join(
+  right_join(
     bay_zips %>% select(GEOID10),
     by = c("ZIPCODE" = "GEOID10")
   ) %>%
@@ -181,10 +179,9 @@ pge_19_elec <- pge_17_20_elec %>% filter(YEAR == "2019") %>%
   filter(MONTH == 3) %>% 
   filter(CUSTOMERCLASS %in% c("Elec- Commercial","Elec- Residential")) %>% 
   mutate(ZIPCODE = ZIPCODE %>% as.character()) %>%
-  filter(ZIPCODE %in% bay_zips$ZCTA5CE10) %>% 
   group_by(ZIPCODE) %>% 
   summarize(TOTALKWH = sum(TOTALKWH, na.rm = T)) %>% 
-  left_join(
+  right_join(
     bay_zips %>% select(GEOID10),
     by = c("ZIPCODE" = "GEOID10")
   ) %>% 
@@ -195,10 +192,9 @@ pge_20_elec <- pge_17_20_elec %>% filter(YEAR == "2020") %>%
   filter(MONTH == 3) %>% 
   filter(CUSTOMERCLASS %in% c("Elec- Commercial","Elec- Residential")) %>% 
   mutate(ZIPCODE = ZIPCODE %>% as.character()) %>%
-  filter(ZIPCODE %in% bay_zips$ZCTA5CE10) %>% 
   group_by(ZIPCODE) %>% 
   summarize(TOTALKWH = sum(TOTALKWH, na.rm = T)) %>% 
-  left_join(
+  right_join(
     bay_zips %>% select(GEOID10),
     by = c("ZIPCODE" = "GEOID10")
   ) %>% 
